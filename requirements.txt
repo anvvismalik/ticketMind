@@ -15,4 +15,3 @@ plotly
 streamlit
 requests
 groq
-tokenizers==0.19.1
