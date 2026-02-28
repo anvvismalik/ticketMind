@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+langchain
+langchain-groq
+langchain-core
+langgraph
+chromadb
+sentence-transformers
+sqlalchemy
+psycopg2-binary
+pandas
+python-dotenv
+python-multipart
+plotly
+streamlit
+requests
+groq
