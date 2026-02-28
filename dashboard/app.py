@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import re
 
-API_URL = "http://127.0.0.1:8000"
+API_URL = "https://anvviiii-ticketmind-api.hf.space"
 
 st.set_page_config(page_title="TicketMind AI", page_icon="⚙️", layout="wide")
 
