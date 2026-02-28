@@ -4,7 +4,7 @@ langchain
 langchain-groq
 langchain-core
 langgraph
-chromadb
+chromadb==0.5.23
 sentence-transformers
 sqlalchemy
 psycopg2-binary
