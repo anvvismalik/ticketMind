@@ -4,7 +4,7 @@ langchain
 langchain-groq
 langchain-core
 langgraph
-chromadb==0.5.23
+chromadb==1.0.0
 sentence-transformers
 sqlalchemy
 psycopg2-binary
@@ -15,3 +15,4 @@ plotly
 streamlit
 requests
 groq
+tokenizers==0.19.1
