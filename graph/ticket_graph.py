@@ -18,9 +18,11 @@ class TicketState(TypedDict):
     action: str
     explanation: str
     resolved: bool
+    domain:str
 
 def route_ticket(state: TicketState) -> str:
-    if state['confidence_score'] > 0.75:
+    print(f"[Router] Confidence: {state['confidence_score']} → routing to {'resolution' if state['confidence_score'] >= 0.70 else 'escalation'}")
+    if state['confidence_score'] >= 0.55:
         return "resolution_agent"
     else:
         return "escalation_agent"

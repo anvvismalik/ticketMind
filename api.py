@@ -9,10 +9,17 @@ from datetime import datetime
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 import pandas as pd
 import io
-sys.path.append(os.path.dirname(__file__))
 
+sys.stdout.reconfigure(line_buffering=True)
+sys.path.append(os.path.dirname(__file__))
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
 from db.models import Session, Ticket, AuditLog
-from db.vector_store import load_knowledge_base
+from db.vector_store import load_knowledge_base, retag_existing_tickets
 from graph.ticket_graph import build_pipeline
 from langchain_groq import ChatGroq
 from dotenv import load_dotenv
@@ -26,10 +33,11 @@ pipeline = None
 async def lifespan(app: FastAPI):
     global pipeline
     load_knowledge_base()
+    retag_existing_tickets()
     llm = ChatGroq(
-        model="llama-3.1-8b-instant",
+        model="llama-3.3-70b-versatile",
         api_key=os.getenv("GROQ_API_KEY")
-    )
+   )
     pipeline = build_pipeline(llm)
     print("Pipeline ready")
     yield
@@ -98,7 +106,8 @@ async def submit_ticket(request: TicketRequest):
                 "suggested_resolution": "",
                 "action": "",
                 "explanation": "",
-                "resolved": False
+                "resolved": False,
+                "domain": ""
             },
             config={"configurable": {"thread_id": thread_id}}
         )
@@ -257,7 +266,6 @@ async def resolve_ticket(ticket_id: str, request: ResolveRequest):
                 resolution=request.resolution
             )
 
-        # Update using SQLAlchemy
         ticket.resolved = True
         ticket.final_resolution = request.resolution
         ticket.resolved_at = datetime.now()
@@ -327,44 +335,41 @@ async def upload_dataset(
     source_name: str = Form(default="uploaded_dataset")
 ):
     try:
-        # Read uploaded file
         contents = await file.read()
-        
-        # Detect encoding and parse CSV
+
         try:
             df = pd.read_csv(io.StringIO(contents.decode('utf-8')))
         except UnicodeDecodeError:
             df = pd.read_csv(io.StringIO(contents.decode('latin-1')))
-        
+
         if len(df) == 0:
             raise HTTPException(status_code=400, detail="CSV file is empty")
-        
+
         if len(df.columns) < 2:
             raise HTTPException(status_code=400, detail="CSV must have at least 2 columns")
-        
+
         print(f"[API] Dataset uploaded: {len(df)} rows, {len(df.columns)} columns")
         print(f"[API] Columns: {df.columns.tolist()}")
-        
-        # Use LLM to detect mapping
+
         llm = ChatGroq(
-            model="llama-3.1-8b-instant",
+            model="llama-3.3-70b-versatile",
             api_key=os.getenv("GROQ_API_KEY")
         )
-        
-        from utils.dataset_adapter import detect_column_mapping, validate_mapping, load_dataset
-        
+
+        from utils.dataset_adapter import detect_column_mapping, detect_dataset_domain, validate_mapping, load_dataset
+
         mapping = detect_column_mapping(df, llm)
-        
+        domain = detect_dataset_domain(df, llm)
+
         valid, message = validate_mapping(mapping, df)
         if not valid:
             raise HTTPException(status_code=400, detail=f"Invalid mapping: {message}")
-        
-        # Load dataset into ChromaDB
-        result = load_dataset(df, mapping, source_name)
-        
+
+        result = load_dataset(df, mapping, source_name, domain)
+
         if not result['success']:
             raise HTTPException(status_code=500, detail=result.get('error'))
-        
+
         return {
             "success": True,
             "filename": file.filename,
@@ -372,16 +377,60 @@ async def upload_dataset(
             "rows_in_file": len(df),
             "columns_detected": df.columns.tolist(),
             "mapping_detected": mapping,
+            "domain_detected": domain,
             "processed": result['processed'],
             "skipped": result['skipped'],
             "tickets_added": result['tickets_added'],
             "kb_before": result['kb_before'],
             "kb_after": result['kb_after']
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/debug/domains")
+async def debug_domains():
+    from db.vector_store import get_collection
+    collection = get_collection()
+    results = collection.get(include=["metadatas"], limit=20)
+    domains = [m.get('domain', 'NONE') for m in results['metadatas']]
+    
+    # Count by domain
+    from collections import Counter
+    all_results = collection.get(include=["metadatas"])
+    all_domains = Counter([m.get('domain', 'NONE') for m in all_results['metadatas']])
+    
+    return {"domain_counts": dict(all_domains), "sample_domains": domains}
+
+@app.get("/debug/search")
+async def debug_search():
+    from db.vector_store import get_collection, embedder
+    collection = get_collection()
+    
+    query = "Outlook not receiving emails Exchange server"
+    embedding = embedder.encode(query).tolist()
+    
+    # Search without filter
+    all_results = collection.query(query_embeddings=[embedding], n_results=5)
+    
+    # Search with IT filter
+    it_results = collection.query(
+        query_embeddings=[embedding],
+        n_results=5,
+        where={"domain": {"$eq": "IT_support"}}
+    )
+    
+    return {
+        "without_filter": [
+            {"subject": m.get('subject','')[:50], "domain": m.get('domain','NONE'), "distance": round(d,4)}
+            for m, d in zip(all_results['metadatas'][0], all_results['distances'][0])
+        ],
+        "with_IT_filter": [
+            {"subject": m.get('subject','')[:50], "domain": m.get('domain','NONE'), "distance": round(d,4)}
+            for m, d in zip(it_results['metadatas'][0], it_results['distances'][0])
+        ]
+    }

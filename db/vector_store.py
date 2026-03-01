@@ -1,5 +1,4 @@
 import chromadb
-from chromadb.auth.token_authn import TokenAuthClientProvider
 from sentence_transformers import SentenceTransformer
 import os
 from dotenv import load_dotenv
@@ -26,7 +25,6 @@ if CHROMA_API_KEY:
     )
 else:
     print("Using ChromaDB Local")
-    import os
     CHROMA_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'chromadb')
     chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
 
@@ -44,13 +42,13 @@ def load_knowledge_base():
         pkl_path = _os.path.join(_os.path.dirname(__file__), '..', 'data', 'ticketmind_embeddings.pkl')
         with open(pkl_path, 'rb') as f:
             data = pickle.load(f)
-        
+
         batch_size = 100
         docs = data['documents']
         metas = data['metadatas']
         ids = data['ids']
         embeddings = data['embeddings']
-        
+
         for i in range(0, len(docs), batch_size):
             ticket_collection.add(
                 embeddings=embeddings[i:i+batch_size],
@@ -62,3 +60,68 @@ def load_knowledge_base():
         print(f"KB loaded: {ticket_collection.count()} tickets")
     else:
         print(f"KB already loaded: {count} tickets")
+
+
+def retag_existing_tickets():
+    """Add domain tags to existing tickets that don't have them"""
+    try:
+        collection = get_collection()
+        total = collection.count()
+        print(f"[Retag] Total tickets: {total}")
+
+        batch_size = 300
+        offset = 0
+        ids_to_update = []
+        metas_to_update = []
+
+        while offset < total:
+            results = collection.get(
+                include=["metadatas"],
+                limit=batch_size,
+                offset=offset
+            )
+            
+            for i, meta in enumerate(results['metadatas']):
+                if 'domain' not in meta or not meta['domain']:
+                    ticket_id = results['ids'][i]
+                    source = meta.get('source', '')
+                    
+                    source_lower = source.lower()
+                    doc_text = meta.get('subject', '') + ' ' + meta.get('body', '')
+                    doc_lower = doc_text.lower()
+
+                    if any(k in source_lower for k in ['kaggle', 'customer', 'support_ticket', 'ecommerce', 'retail']):
+                        domain = 'customer_support'
+                    elif any(k in doc_lower for k in ['refund', 'return', 'exchange', 'order', 'shipping', 'billing', 'invoice', 'payment', 'purchase']):
+                        domain = 'customer_support'
+                    elif any(k in doc_lower for k in ['network', 'vpn', 'outlook', 'windows', 'software', 'hardware', 'printer', 'server', 'email', 'computer', 'laptop', 'wifi', 'password', 'login', 'access']):
+                        domain = 'IT_support'
+                    else:
+                        domain = 'general'
+
+                    updated_meta = dict(meta)
+                    updated_meta['domain'] = domain
+                    ids_to_update.append(ticket_id)
+                    metas_to_update.append(updated_meta)
+
+            offset += batch_size
+            print(f"[Retag] Scanned {min(offset, total)}/{total}")
+
+        if not ids_to_update:
+            print("[Retag] All tickets already have domain tags")
+            return
+
+        print(f"[Retag] Updating {len(ids_to_update)} tickets...")
+        
+        update_batch = 100
+        for i in range(0, len(ids_to_update), update_batch):
+            collection.update(
+                ids=ids_to_update[i:i+update_batch],
+                metadatas=metas_to_update[i:i+update_batch]
+            )
+            print(f"[Retag] Updated {min(i+update_batch, len(ids_to_update))}/{len(ids_to_update)}")
+
+        print(f"[Retag] Done — {len(ids_to_update)} tickets tagged")
+
+    except Exception as e:
+        print(f"[Retag] Error: {e} — continuing without retagging")
