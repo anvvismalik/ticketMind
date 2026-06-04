@@ -12,6 +12,7 @@ pandas
 python-dotenv
 python-multipart
 plotly
-streamlit>=1.32.0
+streamlit==1.40.0
+starlette==0.41.0
 requests
 groq
